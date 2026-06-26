@@ -1,5 +1,7 @@
 # raft
 
+[![build](https://github.com/jinwovo/raft/actions/workflows/ci.yml/badge.svg)](https://github.com/jinwovo/raft/actions/workflows/ci.yml)
+
 A from-scratch implementation of the **Raft consensus algorithm** — leader election, log
 replication, and the commit/safety rules — **proven correct under deterministic fault injection**,
 and made visible through an interactive cluster visualizer you can break with your mouse.
@@ -161,7 +163,7 @@ pwsh scripts/raft-cluster-test.ps1
 | **P2** | Next.js visualizer — node ring with role colors, leader heartbeat ping, candidate pulse, animated RPC packets, per-node replicated-log strip; click to freeze/thaw, split & heal | ✅ done |
 | **P3** | **pre-vote ✅ · snapshots & log compaction ✅ · linearizable reads (ReadIndex) ✅ · dynamic membership ✅** — single-server add/remove (proven by `MembershipTest`); all four are live toggles in the visualizer | ✅ done |
 | **P4** | **multi-instance over a real network ✅** — three separate JVMs talking over HTTP elect a leader, replicate to convergence, and survive a leader kill (`RealNetworkConvergenceTest` + `scripts/raft-cluster-test.ps1`) | ✅ done |
-| **P5** | Playwright demo GIF (partition → split-brain prevented → heal → converge), ADRs, public repo | ⏳ |
+| **P5** | demo GIF · ADRs · public repo · green CI | ✅ done |
 
 ## ADRs
 
