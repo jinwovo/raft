@@ -1,0 +1,12 @@
+// raft — a from-scratch Raft consensus engine, proven under deterministic fault
+// injection and made visible through an interactive cluster visualizer.
+//
+// Multi-module:
+//   raft-core/ — pure-Java, dependency-free Raft (leader election, log replication,
+//                commit/safety) + a seeded chaos simulation asserting Raft's safety
+//                invariants under partitions, crashes, delays, reorders, duplicates (P0)
+//   app/       — Spring Boot 4.1 live server: hosts a cluster over a controllable
+//                network, streams state over WebSocket, exposes a control API (P1+)
+//
+// No plugins are applied at the root; each module is self-contained so the consensus
+// core can be reasoned about (and simulation-tested) with zero framework on the classpath.

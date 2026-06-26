@@ -1,0 +1,29 @@
+server:
+  port: 8104
+
+spring:
+  application:
+    name: raft
+
+# The live in-process cluster. Timings are in logical ticks; the driver advances one tick every
+# `tick-millis`, so an election timeout of 12–24 ticks at 120ms is a watchable ~1.4–2.9s.
+raft:
+  cluster:
+    size: 5
+    election-min: 12
+    election-max: 24
+    heartbeat: 4
+    tick-millis: 120
+    min-latency: 1
+    max-latency: 3
+    seed: 42
+    autorun: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always

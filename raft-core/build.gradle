@@ -1,0 +1,42 @@
+plugins {
+	id 'java'
+}
+
+group = 'com.portfolio'
+version = '0.0.1-SNAPSHOT'
+description = 'raft raft-core — pure-Java Raft consensus engine (leader election + log replication + commit safety), driven by an injectable clock and a pluggable message transport so the exact same code runs under a deterministic chaos simulation and the live server'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.encoding = 'UTF-8'
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	// Pure-Java module: NO production dependencies on purpose — the safety guarantees
+	// must hold for the consensus algorithm itself, not for any framework wiring around it.
+
+	// --- test: jqwik drives the seeded simulation/property proofs; JUnit 5 for plain unit tests ---
+	testImplementation 'net.jqwik:jqwik:1.9.1'
+	testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+	testImplementation 'org.assertj:assertj-core:3.26.3'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.4'
+}
+
+tasks.named('test') {
+	useJUnitPlatform {
+		includeEngines 'jqwik', 'junit-jupiter'
+	}
+	testLogging {
+		events 'passed', 'skipped', 'failed'
+		showStandardStreams = false
+	}
+}

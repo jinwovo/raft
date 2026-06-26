@@ -1,0 +1,9 @@
+rootProject.name = 'raft'
+
+include 'raft-core'
+include 'app'
+// 'raft-core' = pure-Java, dependency-free Raft consensus engine + a deterministic chaos
+//               simulation proving the safety invariants (P0).
+// 'app'       = Spring Boot 4.1 live server: hosts an in-process cluster over a controllable
+//               network, streams state over WebSocket + a control API (P1). The Next.js
+//               visualizer lives in web/ as a separate npm project (P2).

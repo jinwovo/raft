@@ -1,0 +1,49 @@
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '4.1.0'
+	id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.portfolio'
+version = '0.0.1-SNAPSHOT'
+description = 'raft app — live server: hosts an in-process Raft cluster over a controllable network, streams cluster state over WebSocket, and exposes a control API (kill/heal/partition/latency/propose) that the visualizer drives'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.encoding = 'UTF-8'
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	// the consensus engine (P0) — the live cluster drives the exact same core the simulation tortures
+	implementation project(':raft-core')
+
+	// web + websocket transport
+	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	implementation 'org.springframework.boot:spring-boot-starter-websocket'
+
+	// observability (Micrometer + /actuator/prometheus)
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
+
+	// test: the full application context drives the live cluster engine
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// Boot plugin: keep only the runnable bootJar (no extra -plain.jar).
+tasks.named('jar') {
+	enabled = false
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}
