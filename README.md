@@ -123,27 +123,69 @@ The whole run is a pure function of the seed, so a violation collapses to a sing
 number.
 
 ```
-RaftReplicationTest      ✓ leader election + log replication            (3)
-PreVoteTest              ✓ no term inflation on a partitioned node       (3)
-SnapshotTest             ✓ log compaction + InstallSnapshot catch-up     (2)
-ReadIndexTest            ✓ linearizable reads; a partitioned leader can't (4)
-MembershipTest           ✓ single-server add / remove                    (2)
-RaftSafetySimulationTest ✓ safety + convergence under chaos   (150 seeds) (1)
-BUILD SUCCESSFUL — 15 tests
+RaftReplicationTest      ✓ leader election + log replication              (3)
+PreVoteTest              ✓ no term inflation on a partitioned node         (3)
+SnapshotTest             ✓ log compaction + InstallSnapshot catch-up       (2)
+ReadIndexTest            ✓ linearizable reads; a partitioned leader can't  (4)
+MembershipTest           ✓ single-server add / remove / leader self-removal (3)
+LinearizabilityTest      ✓ concurrent reads+writes linearize; the checker
+                           has teeth (rejects a stale-read history)        (4)
+RaftSafetySimulationTest ✓ safety + convergence under chaos     (150 seeds) (1)
+BUILD SUCCESSFUL — 20 tests
 ```
+
+## Proof, part two: linearizability
+
+The chaos DST proves the replicated *logs* never diverge. A separate oracle proves the values clients
+actually *observe* are correct. `LinearizabilityTest` drives a live cluster with several concurrent clients
+reading and writing a single register over a reordering network, records the externally observed history
+(each operation's real-time call/return interval and its result), and checks it with a **Wing & Gong
+linearizability checker** — the same idea as Jepsen's Knossos:
+
+> is there *some* sequential order of these overlapping operations that both respects real time (if A
+> returned before B was called, A precedes B) and obeys register semantics (every read returns the latest
+> write)?
+
+Writes go to the leader and reads go through **ReadIndex (§6.4)** — exactly the mechanism that makes a Raft
+read linearizable instead of possibly-stale — and the whole concurrent history checks out as linearizable
+across dozens of seeds. To show the oracle isn't vacuous, `checkerHasTeeth` feeds it a history where a read
+returns a value that a fully-completed later write had already overwritten, and the checker correctly
+rejects it.
+
+## Performance
+
+A dependency-free micro-benchmark (`./gradlew :raft-core:benchmark`) drives the **same `RaftNode`** in a
+single thread over an in-memory, loss-free network and reports throughput, commit latency, and failover —
+deterministic for a fixed seed:
+
+| cluster | throughput (commits/s) | commit latency, ticks (p50 / p99 / max) | leader failover (ticks) |
+|---|---:|---:|---:|
+| 3 nodes | ~14,000 | 2 / 2 / 2 | ~35 |
+| 5 nodes | ~5,000 | 2 / 2 / 2 | ~14 |
+
+The numbers worth reading are the *structural* ones. **Commit latency is a flat 2 ticks** — one round trip
+(leader → follower → leader) — so in a real cluster a write commits in ≈ one network RTT regardless of load.
+**Failover takes a few dozen ticks**, i.e. about one election timeout, to elect a new leader and commit a
+fresh write after the old leader is killed. Throughput is the in-process ceiling and only says the consensus
+bookkeeping itself isn't the bottleneck — a real deployment is bound by the network, not by this code.
 
 ## Stack
 
 - **Java 21**, Gradle (wrapper) — `raft-core` is **pure Java with zero production dependencies** on
   purpose: the safety guarantee must hold for the algorithm itself, not for any framework around it.
 - **jqwik** (property/seed-driven), **JUnit 5**, **AssertJ** for the proofs.
-- *P1+* Spring Boot 4.1 live server (WebSocket stream + control API + durable log), Next.js
-  visualizer, Postgres/Redis. See the roadmap.
+- *P1+* Spring Boot 4.1 live server (WebSocket state stream + REST control API), Next.js visualizer.
+  Deliberately **in-memory + HTTP** — no datastore — so the whole demo is `docker compose up`. See the roadmap.
 
 ## Quickstart
 
 ```bash
-./gradlew test                        # consensus specs + chaos simulation + the real-HTTP 3-node test
+# one-command demo: backend + visualizer in containers, then open http://localhost:3010
+docker compose up --build
+
+# or run it locally:
+./gradlew test                        # consensus specs + chaos simulation + linearizability + real-HTTP 3-node test
+./gradlew :raft-core:benchmark        # throughput / commit-latency / failover numbers
 
 # the interactive visualizer (an in-process cluster you can break with your mouse)
 java -jar app/build/libs/app-*.jar    # backend on :8104 …
@@ -164,7 +206,11 @@ pwsh scripts/raft-cluster-test.ps1
 | **P3** | **pre-vote ✅ · snapshots & log compaction ✅ · linearizable reads (ReadIndex) ✅ · dynamic membership ✅** — single-server add/remove (proven by `MembershipTest`); all four are live toggles in the visualizer | ✅ done |
 | **P4** | **multi-instance over a real network ✅** — three separate JVMs talking over HTTP elect a leader, replicate to convergence, and survive a leader kill (`RealNetworkConvergenceTest` + `scripts/raft-cluster-test.ps1`) | ✅ done |
 | **P5** | demo GIF · ADRs · public repo · green CI | ✅ done |
+| **P6** | hardening — **linearizability oracle** (Wing & Gong / Knossos-style, with a negative test), a **throughput / latency / failover benchmark**, **leader self-removal** (§6 edge case), and a **`docker compose up` one-command demo** + a web build in CI | ✅ done |
 
 ## ADRs
 
 - [ADR-0001 — a transport-agnostic, single-threaded consensus core](docs/adr/0001-transport-agnostic-core.md)
+- [ADR-0002 — a deterministic chaos simulation (DST)](docs/adr/0002-deterministic-simulation-testing.md)
+- [ADR-0003 — a wire DTO + async HTTP transport for the multi-process cluster](docs/adr/0003-real-network-transport.md)
+- [ADR-0004 — proving linearizability, and a micro-benchmark, on the same core](docs/adr/0004-linearizability-and-benchmark.md)

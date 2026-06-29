@@ -1,0 +1,28 @@
+# One-command demo: `docker compose up --build`, then open http://localhost:3010
+#
+#   backend — Spring Boot live server hosting the in-process Raft cluster + control API + WebSocket (:8104)
+#   web     — Next.js visualizer (:3010); the browser drives the backend directly at localhost:8104
+#
+# This runs the single-JVM interactive visualizer (the same cluster the chaos simulation drives, in real
+# time). The separate three-process real-network proof lives in scripts/raft-cluster-test.ps1.
+
+services:
+  backend:
+    build:
+      context: .
+    image: raft-backend
+    container_name: raft-backend
+    ports:
+      - "8104:8104"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+    image: raft-web
+    container_name: raft-web
+    ports:
+      - "3010:3010"
+    depends_on:
+      - backend
+    restart: unless-stopped

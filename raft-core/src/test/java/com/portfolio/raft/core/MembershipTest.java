@@ -140,7 +140,7 @@ class MembershipTest {
 		}
 		c.run(60);
 
-		// remove a follower (a leader removing itself is a separate edge case the demo UI forbids)
+		// remove a follower (leader self-removal is covered by its own test below)
 		String victim = c.ids.stream().filter(id -> !id.equals(leader.id())).findFirst().orElseThrow();
 		Set<String> remaining = setOf("n0", "n1", "n2", "n3");
 		remaining.remove(victim);
@@ -160,6 +160,46 @@ class MembershipTest {
 		c.run(80);
 		for (String id : remaining) {
 			assertThat(c.machines.get(id).commands()).as("%s committed after the removal", id).contains("after");
+		}
+	}
+
+	@Test
+	void removesTheLeaderItselfWhichStepsDownAndTheRestElectAfresh() {
+		Cluster c = new Cluster(3, 3);
+		c.run(200);
+		RaftNode leader = c.leader();
+		assertThat(leader).isNotNull();
+		for (int i = 0; i < 4; i++) {
+			assertThat(leader.propose("c" + i)).isTrue();
+		}
+		c.run(60);
+
+		// the leader removes ITSELF (§6): it must drive C_new to commit, then step down. Its own replica
+		// stops counting toward the new majority, and as a non-member it goes passive (never campaigns again).
+		String removed = leader.id();
+		Set<String> remaining = new LinkedHashSet<>(List.of("n0", "n1", "n2"));
+		remaining.remove(removed);
+		assertThat(leader.proposeConfigChange(remaining)).isTrue();
+		c.run(300);
+
+		assertThat(leader.role()).as("the removed leader stepped down to follower").isEqualTo(RaftRole.FOLLOWER);
+		assertThat(leader.currentConfig()).as("the removed leader no longer counts itself a member")
+				.doesNotContain(removed);
+
+		// the two remaining servers elected a new leader among themselves and keep committing under the smaller majority
+		RaftNode after = null;
+		for (String id : remaining) {
+			if (c.nodes.get(id).role() == RaftRole.LEADER) {
+				after = c.nodes.get(id);
+			}
+		}
+		assertThat(after).as("the remaining servers elected a fresh leader").isNotNull();
+		assertThat(after.id()).as("the new leader is not the removed server").isNotEqualTo(removed);
+
+		assertThat(after.propose("after")).isTrue();
+		c.run(120);
+		for (String id : remaining) {
+			assertThat(c.machines.get(id).commands()).as("%s committed after the self-removal", id).contains("after");
 		}
 	}
 }

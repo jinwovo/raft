@@ -1,0 +1,11 @@
+# Backend image only needs the Gradle build inputs — keep the context small.
+.git
+.gradle
+build
+raft-core/build
+app/build
+web
+docs
+scripts
+.github
+*.md

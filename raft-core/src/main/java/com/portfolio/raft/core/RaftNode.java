@@ -108,7 +108,9 @@ public final class RaftNode {
 				heartbeatDeadline = now + config.heartbeatIntervalMillis();
 			}
 		}
-		else if (now >= electionDeadline) {
+		else if (now >= electionDeadline && currentConfig.contains(id)) {
+			// A server not in the current configuration (e.g. a leader that just removed itself, §6) is no
+			// longer a voting member and must stay passive — it never campaigns and so can't disrupt the cluster.
 			if (config.preVote()) {
 				startPreElection(now);
 			}
@@ -414,7 +416,9 @@ public final class RaftNode {
 			if (termAt(n) != currentTerm) {
 				continue;
 			}
-			int replicas = 1;
+			// A leader that has removed itself from the configuration (§6) no longer counts toward a
+			// majority — its own replica doesn't help commit C_new. Otherwise it counts for itself.
+			int replicas = currentConfig.contains(id) ? 1 : 0;
 			for (String peer : peers()) {
 				if (matchIndex.getOrDefault(peer, 0L) >= n) {
 					replicas++;
@@ -424,6 +428,29 @@ public final class RaftNode {
 				commitIndex = n;
 				committedInCurrentTerm = true; // n is a current-term entry (the §5.4.2 guard above guarantees it)
 				applyCommitted();
+				maybeStepDownIfRemoved();
+				return;
+			}
+		}
+	}
+
+	/**
+	 * §6 leader-removal: a leader that proposes a configuration excluding itself keeps managing the cluster
+	 * just long enough to replicate and commit that change, then steps down. Until C_new commits it must stay
+	 * leader (someone has to drive the change); once committed, the remaining servers elect a fresh leader.
+	 */
+	private void maybeStepDownIfRemoved() {
+		if (role != RaftRole.LEADER || currentConfig.contains(id)) {
+			return;
+		}
+		for (int i = log.size() - 1; i >= 0; i--) {
+			if (isConfigEntry(log.get(i).command())) {
+				long configIndex = snapshotIndex + i + 1;
+				if (configIndex <= commitIndex) {
+					role = RaftRole.FOLLOWER;
+					leaderId = null;
+					pendingReads.clear();
+				}
 				return;
 			}
 		}

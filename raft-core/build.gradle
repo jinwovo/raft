@@ -31,6 +31,14 @@ dependencies {
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.4'
 }
 
+// A dependency-free throughput / latency benchmark of the consensus core (run: ./gradlew :raft-core:benchmark).
+tasks.register('benchmark', JavaExec) {
+	group = 'verification'
+	description = 'Run the in-process throughput / commit-latency / failover benchmark for raft-core'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.portfolio.raft.bench.Benchmark'
+}
+
 tasks.named('test') {
 	useJUnitPlatform {
 		includeEngines 'jqwik', 'junit-jupiter'
