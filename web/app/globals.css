@@ -87,6 +87,14 @@ header.top .sub { color: var(--muted); font-size: 13px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
 
+/* On narrow screens the SVG ring scales down but the absolutely-positioned readout/legend
+   don't — they'd overlap the nodes. Let them flow above the stage instead. */
+@media (max-width: 640px) {
+  .readout, .legend { position: static; top: auto; left: auto; right: auto; margin: 4px 0; }
+  .readout { pointer-events: auto; }
+  .legend { flex-wrap: wrap; gap: 10px; }
+}
+
 .controls {
   display: flex;
   align-items: center;
