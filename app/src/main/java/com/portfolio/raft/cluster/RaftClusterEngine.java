@@ -49,6 +49,7 @@ public final class RaftClusterEngine {
 	private final Map<String, Storage> disks = new LinkedHashMap<>(); // per-node stable storage for crash recovery
 	private final Map<String, Boolean> up = new LinkedHashMap<>();
 	private final Map<String, Integer> side = new LinkedHashMap<>();
+	private final Set<String> pendingRemoval = new LinkedHashSet<>(); // dropped by a joint change, removed once it settles
 	private final PriorityQueue<Envelope> net = new PriorityQueue<>(
 			(a, b) -> a.at() != b.at() ? Long.compare(a.at(), b.at()) : Long.compare(a.seq(), b.seq()));
 	private final List<ClusterSnapshot.MessageEvent> lastStepEvents = new ArrayList<>();
@@ -76,6 +77,7 @@ public final class RaftClusterEngine {
 		disks.clear();
 		up.clear();
 		side.clear();
+		pendingRemoval.clear();
 		net.clear();
 		lastStepEvents.clear();
 		clock = 0;
@@ -138,6 +140,23 @@ public final class RaftClusterEngine {
 			}
 			nodes.get(to).receive(e.msg(), clock);
 		}
+		maybeFinishJointRemoval();
+	}
+
+	/** Once a joint change has settled on C_new, drop the servers it removed from the live view. */
+	private void maybeFinishJointRemoval() {
+		if (pendingRemoval.isEmpty()) {
+			return;
+		}
+		RaftNode leader = leaderNode();
+		if (leader == null || leader.isJointConsensus()
+				|| pendingRemoval.stream().anyMatch(id -> leader.currentConfig().contains(id))) {
+			return; // still transitioning, or the removed servers are still voting members of C_old
+		}
+		for (String id : new ArrayList<>(pendingRemoval)) {
+			despawnNode(id);
+		}
+		pendingRemoval.clear();
 	}
 
 	// --- controls -------------------------------------------------------------------------------
@@ -210,30 +229,77 @@ public final class RaftClusterEngine {
 		if (leader == null) {
 			return false;
 		}
-		int ordinal = ids.stream().mapToInt(s -> Integer.parseInt(s.substring(1))).max().orElse(-1) + 1;
-		String newId = "n" + ordinal;
+		String newId = "n" + nextOrdinal();
 		Set<String> newConfig = new LinkedHashSet<>(leader.currentConfig());
 		newConfig.add(newId);
-		CommandLog machine = new CommandLog();
-		machines.put(newId, machine);
-		Storage disk = new InMemoryStorage();
-		disks.put(newId, disk);
-		up.put(newId, true);
-		side.put(newId, 0);
-		ids.add(newId);
-		nodes.put(newId, new RaftNode(newId, new ArrayList<>(newConfig), currentRaftConfig(),
-				new Random(props.getSeed() * 7_777L + ordinal), machine, this::enqueue, disk));
+		spawnNode(newId, newConfig);
 		boolean accepted = leader.proposeConfigChange(newConfig);
 		if (!accepted) {
-			// a previous change is still in flight — don't leave a half-joined ghost node behind
-			nodes.remove(newId);
-			machines.remove(newId);
-			disks.remove(newId);
-			up.remove(newId);
-			side.remove(newId);
-			ids.remove(newId);
+			despawnNode(newId); // a previous change is still in flight — don't leave a half-joined ghost node behind
 		}
 		return accepted;
+	}
+
+	/**
+	 * Swap out two of the leader's followers for two brand-new servers in a <em>single</em> change via joint
+	 * consensus (Raft §6) — a set replacement the single-server rule can't do without risking two disjoint
+	 * majorities. The cluster passes through a transitional {@code C_old,new} (both configs must agree on every
+	 * election and commit); once it settles on {@code C_new}, the two dropped servers are removed from the view.
+	 */
+	public synchronized boolean jointReconfigure() {
+		RaftNode leader = leaderNode();
+		if (leader == null || leader.isJointConsensus() || !pendingRemoval.isEmpty()) {
+			return false;
+		}
+		Set<String> current = leader.currentConfig();
+		List<String> followers = ids.stream()
+				.filter(id -> !id.equals(leader.id()) && current.contains(id) && Boolean.TRUE.equals(up.get(id)))
+				.toList();
+		if (followers.size() < 2) {
+			return false; // need two droppable followers to make the swap meaningful
+		}
+		List<String> drop = followers.subList(followers.size() - 2, followers.size());
+		String add1 = "n" + nextOrdinal();
+		String add2 = "n" + (nextOrdinal() + 1);
+		Set<String> target = new LinkedHashSet<>(current);
+		target.removeAll(drop);
+		target.add(add1);
+		target.add(add2);
+		spawnNode(add1, target); // the new servers must exist to receive the joint entry and catch up
+		spawnNode(add2, target);
+		boolean accepted = leader.proposeJointConfigChange(target);
+		if (!accepted) {
+			despawnNode(add1);
+			despawnNode(add2);
+			return false;
+		}
+		pendingRemoval.addAll(drop); // kept alive (still voting members of C_old) until the transition commits
+		return true;
+	}
+
+	private int nextOrdinal() {
+		return ids.stream().mapToInt(s -> Integer.parseInt(s.substring(1))).max().orElse(-1) + 1;
+	}
+
+	private void spawnNode(String id, Set<String> config) {
+		CommandLog machine = new CommandLog();
+		machines.put(id, machine);
+		Storage disk = new InMemoryStorage();
+		disks.put(id, disk);
+		up.put(id, true);
+		side.put(id, 0);
+		ids.add(id);
+		nodes.put(id, new RaftNode(id, new ArrayList<>(config), currentRaftConfig(),
+				new Random(props.getSeed() * 7_777L + Integer.parseInt(id.substring(1))), machine, this::enqueue, disk));
+	}
+
+	private void despawnNode(String id) {
+		nodes.remove(id);
+		machines.remove(id);
+		disks.remove(id);
+		up.remove(id);
+		side.remove(id);
+		ids.remove(id);
 	}
 
 	/** Have the leader propose removing one follower, then drop it from the live cluster. */
@@ -340,6 +406,7 @@ public final class RaftClusterEngine {
 					node.commitIndex(), node.lastApplied(), node.lastIndex(), node.snapshotIndex(),
 					node.leaderId(), up.get(id), side.get(id), log));
 		}
-		return new ClusterSnapshot(clock, views, List.copyOf(lastStepEvents), preVote, snapshotThreshold);
+		boolean joint = nodes.values().stream().anyMatch(RaftNode::isJointConsensus);
+		return new ClusterSnapshot(clock, views, List.copyOf(lastStepEvents), preVote, snapshotThreshold, joint);
 	}
 }

@@ -111,6 +111,12 @@ function Readout({ snapshot }: { snapshot: ClusterSnapshot | null }) {
       committed <b>{committed}</b>
       <br />
       pre-vote <b style={{ color: snapshot.preVote ? '#a78bfa' : '#64748b' }}>{snapshot.preVote ? 'on' : 'off'}</b>
+      {snapshot.joint && (
+        <>
+          <br />
+          <b style={{ color: '#f59e0b' }}>joint C_old,new</b>
+        </>
+      )}
     </div>
   );
 }

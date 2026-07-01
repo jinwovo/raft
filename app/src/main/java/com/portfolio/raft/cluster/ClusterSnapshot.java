@@ -10,9 +10,10 @@ import java.util.List;
  * @param nodes  one view per node
  * @param events  the messages sent during the step that produced this snapshot, for animating arrows
  * @param preVote whether the cluster is currently running with the pre-vote protocol enabled
+ * @param joint   whether the cluster is mid joint-consensus transition (a C_old,new configuration, §6)
  */
 public record ClusterSnapshot(long tick, List<NodeView> nodes, List<MessageEvent> events, boolean preVote,
-		long snapshotThreshold) {
+		long snapshotThreshold, boolean joint) {
 
 	/**
 	 * @param id          node id

@@ -20,7 +20,7 @@ and made visible through an interactive cluster visualizer you can break with yo
 
 ![raft — partition and reconverge](docs/demo/raft.gif)
 
-*The whole loop, live: a command replicates across the cluster; the network is split (the isolated minority can only spin as candidates — no split-brain), then heals and every log reconverges; a follower then **crashes and recovers from its on-disk state** (persistence, figure 2) — it rejoins and re-syncs its log instead of starting from zero; and finally leadership is **gracefully transferred** (§3.10) to another node in about one round trip, the leader badge hopping with no election-timeout gap. The stills below are from the same visualizer.*
+*The whole loop, live: a command replicates across the cluster; the network is split (the isolated minority can only spin as candidates — no split-brain), then heals and every log reconverges; a follower **crashes and recovers from its on-disk state** (persistence, figure 2) — it rejoins and re-syncs its log instead of starting from zero; leadership is **gracefully transferred** (§3.10) to another node in about one round trip, the leader badge hopping with no election-timeout gap; and finally an arbitrary membership change via **joint consensus** (§6) swaps two servers for two new ones in a single step — the cluster briefly spans a transitional `C_old,new` (7 nodes, both configurations must agree on every commit) before settling on the new five. The stills below are from the same visualizer.*
 
 ![raft — a converged cluster](docs/demo/raft.png)
 

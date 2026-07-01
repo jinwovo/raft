@@ -16,6 +16,7 @@ type Props = {
   onRemoveNode: () => void;
   onTransferLeadership: () => void;
   onRestartFollower: () => void;
+  onJointReconfigure: () => void;
 };
 
 export function Controls({
@@ -32,6 +33,7 @@ export function Controls({
   onRemoveNode,
   onTransferLeadership,
   onRestartFollower,
+  onJointReconfigure,
 }: Props) {
   const [lat, setLat] = useState(3);
   return (
@@ -68,6 +70,9 @@ export function Controls({
       </button>
       <button className="btn" onClick={onRestartFollower}>
         ⟲ crash+recover
+      </button>
+      <button className="btn" onClick={onJointReconfigure}>
+        ⧉ joint reconfig
       </button>
       <label className="slider">
         latency

@@ -107,4 +107,9 @@ public class ClusterController {
 	public Map<String, Object> restartFollower() {
 		return Map.of("restarted", engine.restartFollower());
 	}
+
+	@PostMapping("/joint-reconfigure")
+	public Map<String, Object> jointReconfigure() {
+		return Map.of("started", engine.jointReconfigure());
+	}
 }

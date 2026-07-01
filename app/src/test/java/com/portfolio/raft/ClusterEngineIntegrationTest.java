@@ -153,6 +153,29 @@ class ClusterEngineIntegrationTest {
 	}
 
 	@Test
+	void swapsTwoServersAtOnceViaJointConsensusThroughTheLiveEngine() {
+		run(200);
+		assertThat(engine.propose("x=1")).isTrue();
+		run(60);
+		java.util.Set<String> before = engine.snapshot().nodes().stream().map(ClusterSnapshot.NodeView::id)
+				.collect(java.util.stream.Collectors.toSet());
+
+		assertThat(engine.jointReconfigure()).as("a healthy cluster accepts a joint swap").isTrue();
+		run(400);
+
+		java.util.Set<String> after = engine.snapshot().nodes().stream().map(ClusterSnapshot.NodeView::id)
+				.collect(java.util.stream.Collectors.toSet());
+		assertThat(after).as("the cluster is still 5 nodes but membership changed").hasSize(5).isNotEqualTo(before);
+		assertThat(engine.snapshot().joint()).as("the transition has settled (no longer joint)").isFalse();
+		// the two newly-added servers hold the committed log, and a fresh write reaches everyone
+		assertThat(engine.propose("y=2")).isTrue();
+		run(120);
+		for (ClusterSnapshot.NodeView n : engine.snapshot().nodes()) {
+			assertThat(n.log()).as("%s holds the full log after the swap", n.id()).contains("x=1", "y=2");
+		}
+	}
+
+	@Test
 	void snapshotSerialisesToJsonForTheStream() {
 		run(50);
 		String json = mapper.writeValueAsString(engine.snapshot());

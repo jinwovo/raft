@@ -71,6 +71,7 @@ export function useCluster() {
   const removeNode = useCallback(() => post('/nodes/remove'), [post]);
   const transferLeadership = useCallback(() => post('/transfer'), [post]);
   const restartFollower = useCallback(() => post('/restart-follower'), [post]);
+  const jointReconfigure = useCallback(() => post('/joint-reconfigure'), [post]);
 
   return {
     snapshot,
@@ -88,5 +89,6 @@ export function useCluster() {
     removeNode,
     transferLeadership,
     restartFollower,
+    jointReconfigure,
   };
 }

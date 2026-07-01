@@ -30,4 +30,5 @@ export interface ClusterSnapshot {
   events: MessageEvent[];
   preVote: boolean;
   snapshotThreshold: number;
+  joint: boolean;
 }

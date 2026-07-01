@@ -62,20 +62,23 @@ async function main() {
   const script = {
     2: () => post('/propose'),
     5: () => post('/propose'),
-    12: () => post('/partition', [majority, minority]),
-    16: () => post('/propose'),
-    19: () => post('/propose'),
-    23: () => post('/propose'),
-    31: () => post('/heal'),
-    40: () => post(`/nodes/${victim}/kill`), // CRASH: the node freezes and falls behind
-    43: () => post('/propose'),
-    46: () => post('/propose'),
-    50: () => post(`/nodes/${victim}/restart`), // RECOVER: rebuilt from its on-disk term/vote/log, then re-syncs
-    58: () => post('/transfer'), // §3.10 — hand leadership to a follower, no election-timeout outage
-    62: () => post('/propose'), // the new leader immediately replicates
-    65: () => post('/propose'),
+    11: () => post('/partition', [majority, minority]),
+    15: () => post('/propose'),
+    18: () => post('/propose'),
+    22: () => post('/propose'),
+    29: () => post('/heal'),
+    38: () => post(`/nodes/${victim}/kill`), // CRASH: the node freezes and falls behind
+    41: () => post('/propose'),
+    44: () => post('/propose'),
+    48: () => post(`/nodes/${victim}/restart`), // RECOVER: rebuilt from its on-disk term/vote/log, then re-syncs
+    56: () => post('/transfer'), // §3.10 — hand leadership to a follower, no election-timeout outage
+    60: () => post('/propose'),
+    62: () => post('/latency?min=2&max=4'), // slow the network so the joint C_old,new phase lingers, visibly
+    64: () => post('/joint-reconfigure'), // §6 — swap TWO followers for two new servers in one joint change
+    71: () => post('/latency?min=0&max=1'),
+    73: () => post('/propose'), // the swapped-in servers commit like any member
   };
-  const TOTAL = 70;
+  const TOTAL = 79;
 
   const frames = [];
   const trace = [];
@@ -88,8 +91,9 @@ async function main() {
       const l = s.nodes.find((n) => n.role === 'LEADER' && n.up);
       const cand = s.nodes.filter((n) => n.role === 'CANDIDATE').length;
       const v = s.nodes.find((n) => n.id === victim);
+      const vs = v ? `${victim}=${v.up ? '' : 'DOWN '}${v.commitIndex}/${v.lastIndex}` : `${victim}=gone`;
       trace.push(
-        `f${f} t${s.tick} L=${l ? l.id : '-'} c${Math.max(...s.nodes.map((n) => n.commitIndex))} cand${cand} ${victim}=${v.up ? '' : 'DOWN '}${v.commitIndex}/${v.lastIndex}`,
+        `f${f} t${s.tick} L=${l ? l.id : '-'} n=${s.nodes.length}${s.joint ? ' JOINT' : ''} c${Math.max(...s.nodes.map((n) => n.commitIndex))} cand${cand} ${vs}`,
       );
     }
     await sleep(FRAME_MS);

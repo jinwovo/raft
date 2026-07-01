@@ -48,6 +48,7 @@ export default function Page() {
         onRemoveNode={cluster.removeNode}
         onTransferLeadership={cluster.transferLeadership}
         onRestartFollower={cluster.restartFollower}
+        onJointReconfigure={cluster.jointReconfigure}
       />
 
       <p className="hint">
