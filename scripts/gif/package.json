@@ -1,0 +1,14 @@
+{
+  "name": "raft-gif",
+  "private": true,
+  "type": "module",
+  "description": "Reproducible demo-GIF generator: drives the live visualizer through a scripted scenario, screenshots frames with Playwright, and encodes an ffmpeg-free GIF with gifenc.",
+  "scripts": {
+    "capture": "node generate.mjs"
+  },
+  "dependencies": {
+    "gifenc": "^1.0.3",
+    "pngjs": "^7.0.0",
+    "playwright": "^1.48.0"
+  }
+}

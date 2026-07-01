@@ -47,7 +47,9 @@
 
 ![raft](docs/demo/raft.gif)
 
-복제 → 네트워크 분할(고립된 소수파는 candidate로만 스핀 = split-brain 없음) → 힐 → 전 로그 재수렴. 비주얼라이저에서 노드를 클릭해 얼리고, 망을 가르고, pre-vote·압축·멤버십을 라이브로 토글할 수 있습니다.
+복제 → 네트워크 분할(고립된 소수파는 candidate로만 스핀 = split-brain 없음) → 힐 → 전 로그 재수렴 → **리더십 이양**(§3.10, ~1왕복에 리더 배지가 다른 노드로 점프, 선거 타임아웃 공백 없음). 비주얼라이저에서 노드를 클릭해 얼리고, 망을 가르고, pre-vote·압축·멤버십·리더이양을 라이브로 토글할 수 있습니다.
+
+> 데모 GIF는 재현 가능하게 생성됩니다: 라이브 스택을 띄운 뒤 `cd scripts/gif && npm install && npx playwright install chromium && npm run capture` (Playwright 스크린샷 → gifenc 인코딩, ffmpeg 불필요).
 
 ## 빠른 시작
 

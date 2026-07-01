@@ -20,7 +20,7 @@ and made visible through an interactive cluster visualizer you can break with yo
 
 ![raft — partition and reconverge](docs/demo/raft.gif)
 
-*The whole loop, live: a command replicates across the cluster, the network is split (the isolated minority can only spin as candidates — no split-brain), then it heals and every log reconverges. The stills below are from the same visualizer.*
+*The whole loop, live: a command replicates across the cluster, the network is split (the isolated minority can only spin as candidates — no split-brain), then it heals and every log reconverges, and finally leadership is **gracefully transferred** (§3.10) to another node in about one round trip — the leader badge hops with no election-timeout gap. The stills below are from the same visualizer.*
 
 ![raft — a converged cluster](docs/demo/raft.png)
 
@@ -41,6 +41,8 @@ and made visible through an interactive cluster visualizer you can break with yo
 ![raft — dynamic membership](docs/demo/raft-membership.png)
 
 *Dynamic membership (§6) is live too — the configuration is itself a log entry, so adding a server (here the cluster has grown from 5 to 9) replicates like any other entry and the new node catches up. A node adopts the latest configuration in its log immediately; single-server changes are safe without joint consensus. `MembershipTest` proves an added node joins the majority and a removed one stops counting.*
+
+> The GIF is **reproducible**: with the stack running, `cd scripts/gif && npm install && npx playwright install chromium && npm run capture` drives the live visualizer through the scripted scenario, screenshots each frame with Playwright, and encodes an ffmpeg-free GIF with gifenc.
 
 ---
 
