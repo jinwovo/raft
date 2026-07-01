@@ -42,7 +42,11 @@ and made visible through an interactive cluster visualizer you can break with yo
 
 *Dynamic membership (§6) is live too — the configuration is itself a log entry, so adding a server (here the cluster has grown from 5 to 9) replicates like any other entry and the new node catches up. A node adopts the latest configuration in its log immediately; single-server changes are safe without joint consensus. `MembershipTest` proves an added node joins the majority and a removed one stops counting.*
 
-> The GIF is **reproducible**: with the stack running, `cd scripts/gif && npm install && npx playwright install chromium && npm run capture` drives the live visualizer through the scripted scenario, screenshots each frame with Playwright, and encodes an ffmpeg-free GIF with gifenc.
+![raft — joint consensus](docs/demo/raft-joint.png)
+
+*An **arbitrary** membership change via joint consensus (§6): two followers are swapped for two brand-new servers (`n5`, `n6`, still at term 0 and catching up) in a **single** change — something single-server changes can't do safely. During the transition the cluster spans a joint `C_old,new` (the amber badge; seven nodes here), and every election and commit needs a majority of **both** the old and the new configuration, so the two can't elect conflicting leaders. Once it commits, the cluster settles on the new five. `JointConsensusTest` proves a whole-set swap end-to-end.*
+
+> The GIF is **reproducible**: with the stack running, `cd scripts/gif && npm install && npx playwright install chromium && npm run capture` drives the live visualizer through the scripted scenario, screenshots each frame with Playwright, and encodes an ffmpeg-free GIF with gifenc. (`npm run still:joint` captures the joint-consensus still above.)
 
 ---
 
