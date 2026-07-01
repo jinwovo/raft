@@ -51,9 +51,11 @@ async function main() {
   await page.waitForSelector('.stage svg circle', { timeout: 10000 });
   const stage = page.locator('.stage');
 
-  // Scenario: which action fires before which frame. The leader-transfer beat is the new addition.
+  // Scenario: which action fires before which frame. Beats: replicate, partition/heal,
+  // CRASH + RECOVER-FROM-DISK a node (§ figure 2 persistence), then TRANSFER leadership (§3.10).
   const leader = await leaderId();
   const others = ['n0', 'n1', 'n2', 'n3', 'n4'].filter((id) => id !== leader);
+  const victim = others[0]; // the node we crash and recover — on the majority side, so it holds a real log
   const majority = [leader, others[0], others[1]]; // keep the leader with a majority so it keeps committing
   const minority = [others[2], others[3]];
 
@@ -64,12 +66,16 @@ async function main() {
     16: () => post('/propose'),
     19: () => post('/propose'),
     23: () => post('/propose'),
-    32: () => post('/heal'),
-    48: () => post('/transfer'), // §3.10 — hand leadership to a follower, no election-timeout outage
-    52: () => post('/propose'), // the new leader immediately replicates
-    55: () => post('/propose'),
+    31: () => post('/heal'),
+    40: () => post(`/nodes/${victim}/kill`), // CRASH: the node freezes and falls behind
+    43: () => post('/propose'),
+    46: () => post('/propose'),
+    50: () => post(`/nodes/${victim}/restart`), // RECOVER: rebuilt from its on-disk term/vote/log, then re-syncs
+    58: () => post('/transfer'), // §3.10 — hand leadership to a follower, no election-timeout outage
+    62: () => post('/propose'), // the new leader immediately replicates
+    65: () => post('/propose'),
   };
-  const TOTAL = 66;
+  const TOTAL = 70;
 
   const frames = [];
   const trace = [];
@@ -81,7 +87,10 @@ async function main() {
     if (s) {
       const l = s.nodes.find((n) => n.role === 'LEADER' && n.up);
       const cand = s.nodes.filter((n) => n.role === 'CANDIDATE').length;
-      trace.push(`f${f} t${s.tick} L=${l ? l.id : '-'} c${Math.max(...s.nodes.map((n) => n.commitIndex))} cand${cand}`);
+      const v = s.nodes.find((n) => n.id === victim);
+      trace.push(
+        `f${f} t${s.tick} L=${l ? l.id : '-'} c${Math.max(...s.nodes.map((n) => n.commitIndex))} cand${cand} ${victim}=${v.up ? '' : 'DOWN '}${v.commitIndex}/${v.lastIndex}`,
+      );
     }
     await sleep(FRAME_MS);
   }

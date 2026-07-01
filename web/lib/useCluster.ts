@@ -70,6 +70,7 @@ export function useCluster() {
   const addNode = useCallback(() => post('/nodes/add'), [post]);
   const removeNode = useCallback(() => post('/nodes/remove'), [post]);
   const transferLeadership = useCallback(() => post('/transfer'), [post]);
+  const restartFollower = useCallback(() => post('/restart-follower'), [post]);
 
   return {
     snapshot,
@@ -86,5 +87,6 @@ export function useCluster() {
     addNode,
     removeNode,
     transferLeadership,
+    restartFollower,
   };
 }

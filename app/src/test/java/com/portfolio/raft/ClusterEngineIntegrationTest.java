@@ -130,6 +130,29 @@ class ClusterEngineIntegrationTest {
 	}
 
 	@Test
+	void restartsACrashedNodeFromDiskAndItRecoversTheLog() {
+		run(200);
+		assertThat(engine.propose("x=1")).isTrue();
+		run(120);
+		String victim = engine.snapshot().nodes().stream().filter(n -> !"LEADER".equals(n.role()))
+				.map(ClusterSnapshot.NodeView::id).findFirst().orElseThrow();
+
+		// crash it (frozen, falls behind while the cluster keeps committing), then restart it from disk
+		engine.kill(victim);
+		for (int i = 0; i < 60; i++) {
+			engine.step();
+			engine.propose("c" + i);
+		}
+		engine.restart(victim);
+		run(300);
+
+		// the rebuilt-from-storage node rejoins and recovers the committed log into its fresh state machine
+		ClusterSnapshot.NodeView recovered = engine.snapshot().nodes().stream().filter(n -> n.id().equals(victim))
+				.findFirst().orElseThrow();
+		assertThat(recovered.log()).as("%s recovered its log after a crash+restart", victim).contains("x=1", "c59");
+	}
+
+	@Test
 	void snapshotSerialisesToJsonForTheStream() {
 		run(50);
 		String json = mapper.writeValueAsString(engine.snapshot());

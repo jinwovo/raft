@@ -1,11 +1,13 @@
 package com.portfolio.raft.cluster;
 
 import com.portfolio.raft.core.CommandLog;
+import com.portfolio.raft.core.InMemoryStorage;
 import com.portfolio.raft.core.LogEntry;
 import com.portfolio.raft.core.Message;
 import com.portfolio.raft.core.RaftConfig;
 import com.portfolio.raft.core.RaftNode;
 import com.portfolio.raft.core.RaftRole;
+import com.portfolio.raft.core.Storage;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -44,6 +46,7 @@ public final class RaftClusterEngine {
 	private final List<String> ids = new ArrayList<>();
 	private final Map<String, RaftNode> nodes = new LinkedHashMap<>();
 	private final Map<String, CommandLog> machines = new LinkedHashMap<>();
+	private final Map<String, Storage> disks = new LinkedHashMap<>(); // per-node stable storage for crash recovery
 	private final Map<String, Boolean> up = new LinkedHashMap<>();
 	private final Map<String, Integer> side = new LinkedHashMap<>();
 	private final PriorityQueue<Envelope> net = new PriorityQueue<>(
@@ -70,6 +73,7 @@ public final class RaftClusterEngine {
 		ids.clear();
 		nodes.clear();
 		machines.clear();
+		disks.clear();
 		up.clear();
 		side.clear();
 		net.clear();
@@ -88,10 +92,12 @@ public final class RaftClusterEngine {
 			String id = ids.get(i);
 			CommandLog machine = new CommandLog();
 			machines.put(id, machine);
+			Storage disk = new InMemoryStorage();
+			disks.put(id, disk);
 			up.put(id, true);
 			side.put(id, 0);
 			nodes.put(id, new RaftNode(id, ids, cfg, new Random(props.getSeed() * 1_000_003L + i), machine,
-					this::enqueue));
+					this::enqueue, disk));
 		}
 	}
 
@@ -210,16 +216,19 @@ public final class RaftClusterEngine {
 		newConfig.add(newId);
 		CommandLog machine = new CommandLog();
 		machines.put(newId, machine);
+		Storage disk = new InMemoryStorage();
+		disks.put(newId, disk);
 		up.put(newId, true);
 		side.put(newId, 0);
 		ids.add(newId);
 		nodes.put(newId, new RaftNode(newId, new ArrayList<>(newConfig), currentRaftConfig(),
-				new Random(props.getSeed() * 7_777L + ordinal), machine, this::enqueue));
+				new Random(props.getSeed() * 7_777L + ordinal), machine, this::enqueue, disk));
 		boolean accepted = leader.proposeConfigChange(newConfig);
 		if (!accepted) {
 			// a previous change is still in flight — don't leave a half-joined ghost node behind
 			nodes.remove(newId);
 			machines.remove(newId);
+			disks.remove(newId);
 			up.remove(newId);
 			side.remove(newId);
 			ids.remove(newId);
@@ -249,11 +258,42 @@ public final class RaftClusterEngine {
 		if (accepted) {
 			nodes.remove(victim);
 			machines.remove(victim);
+			disks.remove(victim);
 			up.remove(victim);
 			side.remove(victim);
 			ids.remove(victim);
 		}
 		return accepted;
+	}
+
+	/**
+	 * Model a real crash + reboot of one node (Raft figure 2 persistence): discard its in-memory state and
+	 * rebuild it from its stable storage via {@link RaftNode#restore}. Its term, vote and log come back from
+	 * disk (so it can't double-vote), its state machine is empty and replays as it re-learns the commit index
+	 * from the leader, and volatile role/leader start fresh — exactly a reboot. It comes back online.
+	 */
+	public synchronized void restart(String id) {
+		if (!nodes.containsKey(id)) {
+			return;
+		}
+		CommandLog machine = new CommandLog(); // a rebooted process starts with an empty state machine
+		machines.put(id, machine);
+		int ordinal = Integer.parseInt(id.substring(1));
+		nodes.put(id, RaftNode.restore(id, currentRaftConfig(), new Random(props.getSeed() * 1_000_003L + ordinal),
+				machine, this::enqueue, disks.get(id)));
+		up.put(id, true);
+	}
+
+	/** Crash-and-recover a live follower from disk (for the UI button); false if there's no eligible follower. */
+	public synchronized boolean restartFollower() {
+		for (String id : ids) {
+			RaftNode node = nodes.get(id);
+			if (Boolean.TRUE.equals(up.get(id)) && node.role() != RaftRole.LEADER) {
+				restart(id);
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

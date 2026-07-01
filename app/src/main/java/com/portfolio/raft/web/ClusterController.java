@@ -97,4 +97,14 @@ public class ClusterController {
 	public Map<String, Object> transferLeadership() {
 		return Map.of("transferred", engine.transferLeadership());
 	}
+
+	@PostMapping("/nodes/{id}/restart")
+	public void restart(@PathVariable String id) {
+		engine.restart(id);
+	}
+
+	@PostMapping("/restart-follower")
+	public Map<String, Object> restartFollower() {
+		return Map.of("restarted", engine.restartFollower());
+	}
 }
