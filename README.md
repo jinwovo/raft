@@ -128,10 +128,14 @@ PreVoteTest              ✓ no term inflation on a partitioned node         (3)
 SnapshotTest             ✓ log compaction + InstallSnapshot catch-up       (2)
 ReadIndexTest            ✓ linearizable reads; a partitioned leader can't  (4)
 MembershipTest           ✓ single-server add / remove / leader self-removal (3)
+JointConsensusTest       ✓ arbitrary set swap via C_old,new dual majority (3)
+LeadershipTransferTest   ✓ §3.10 handoff in ~1 round trip, no scramble    (3)
+ClientSessionTest        ✓ retried command applied exactly once (§8)       (2)
+PersistenceTest          ✓ crash recovery: term/vote/log survive a restart (3)
 LinearizabilityTest      ✓ concurrent reads+writes linearize; the checker
                            has teeth (rejects a stale-read history)        (4)
 RaftSafetySimulationTest ✓ safety + convergence under chaos     (150 seeds) (1)
-BUILD SUCCESSFUL — 20 tests
+BUILD SUCCESSFUL — 31 tests
 ```
 
 ## Proof, part two: linearizability
@@ -168,6 +172,32 @@ The numbers worth reading are the *structural* ones. **Commit latency is a flat 
 **Failover takes a few dozen ticks**, i.e. about one election timeout, to elect a new leader and commit a
 fresh write after the old leader is killed. Throughput is the in-process ceiling and only says the consensus
 bookkeeping itself isn't the bottleneck — a real deployment is bound by the network, not by this code.
+
+## Production-grade correctness (P7)
+
+Four additions take the engine from "correct under chaos" to "would survive a real deployment" — each one a
+place a naive Raft misbehaves even though its logs never diverge:
+
+- **Exactly-once client commands (§8).** Consensus is only *at-least-once*: a client that misses the ack
+  retries, and Raft commits the retried command again. Commands carry a `(clientId, seq)` stamp and a
+  `DedupStateMachine` applies each request once — the session table lives *inside* the snapshot, so a
+  follower caught up by InstallSnapshot still deduplicates a retransmit. This is what keeps the register
+  linearizable **under retries** (it pairs with the oracle above).
+- **Leadership transfer (§3.10).** A leader can hand off for maintenance without a timeout-long outage: it
+  catches the target fully up, then sends `TimeoutNow` so the target campaigns immediately — no election
+  timeout, no pre-vote, no multi-candidate scramble. Handoff costs ≈ one round trip and bumps the term by
+  exactly one. It's a live **⇄ transfer leader** button in the visualizer.
+- **Joint consensus (§6).** For an *arbitrary* membership change (swap several servers at once, which the
+  single-server rule can't do safely), the leader goes through a transitional `C_old,new` in which every
+  election and commit needs a majority of **both** the old and new configuration — the overlap that makes two
+  configurations unable to elect conflicting leaders. Once `C_old,new` commits, it appends the final `C_new`.
+  The quorum layer is set-based (`hasQuorum`) so this dual-majority rule holds everywhere: elections, commit,
+  and ReadIndex confirmations.
+- **Persistence & crash recovery (figure 2).** Term, vote, log, and snapshot are written to an injected
+  `Storage` (the core stays I/O-free — the simulation uses a no-op, the live server a file with an atomic
+  write) and `RaftNode.restore` rebuilds a node after a crash. The point isn't just not losing data: a node
+  that forgot its vote could vote twice in one term and elect two leaders — the headline test crashes a node
+  *after* it votes and shows the restarted node refuses to vote again.
 
 ## Stack
 
@@ -207,6 +237,7 @@ pwsh scripts/raft-cluster-test.ps1
 | **P4** | **multi-instance over a real network ✅** — three separate JVMs talking over HTTP elect a leader, replicate to convergence, and survive a leader kill (`RealNetworkConvergenceTest` + `scripts/raft-cluster-test.ps1`) | ✅ done |
 | **P5** | demo GIF · ADRs · public repo · green CI | ✅ done |
 | **P6** | hardening — **linearizability oracle** (Wing & Gong / Knossos-style, with a negative test), a **throughput / latency / failover benchmark**, **leader self-removal** (§6 edge case), and a **`docker compose up` one-command demo** + a web build in CI | ✅ done |
+| **P7** | production-grade correctness — **exactly-once client sessions** (§8), **leadership transfer** (§3.10, live button), **joint consensus** for arbitrary membership changes (§6, dual majorities), and **persistence / crash recovery** (figure 2, no double-voting) | ✅ done |
 
 ## ADRs
 
@@ -214,3 +245,4 @@ pwsh scripts/raft-cluster-test.ps1
 - [ADR-0002 — a deterministic chaos simulation (DST)](docs/adr/0002-deterministic-simulation-testing.md)
 - [ADR-0003 — a wire DTO + async HTTP transport for the multi-process cluster](docs/adr/0003-real-network-transport.md)
 - [ADR-0004 — proving linearizability, and a micro-benchmark, on the same core](docs/adr/0004-linearizability-and-benchmark.md)
+- [ADR-0005 — production-grade correctness: sessions, transfer, joint consensus, persistence](docs/adr/0005-membership-transfer-persistence.md)

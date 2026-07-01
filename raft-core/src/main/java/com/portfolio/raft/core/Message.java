@@ -66,4 +66,13 @@ public sealed interface Message {
 	/** Follower → leader: acknowledges the snapshot, echoing {@code lastIncludedIndex} it installed. */
 	record InstallSnapshotReply(String from, String to, long term, long lastIncludedIndex) implements Message {
 	}
+
+	/**
+	 * Leader → a chosen, fully-caught-up follower: "campaign right now" (dissertation §3.10, leadership
+	 * transfer). The recipient starts an election immediately, skipping both its election timeout and the
+	 * pre-vote round, so the handover completes in about one round trip instead of an election timeout.
+	 * There is no reply — the outgoing leader simply steps down when it sees the new, higher term.
+	 */
+	record TimeoutNowRequest(String from, String to, long term) implements Message {
+	}
 }

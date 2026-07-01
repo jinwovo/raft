@@ -92,4 +92,9 @@ public class ClusterController {
 	public Map<String, Object> removeNode() {
 		return Map.of("removed", engine.removeNode());
 	}
+
+	@PostMapping("/transfer")
+	public Map<String, Object> transferLeadership() {
+		return Map.of("transferred", engine.transferLeadership());
+	}
 }

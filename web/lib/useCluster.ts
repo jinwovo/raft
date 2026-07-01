@@ -69,6 +69,7 @@ export function useCluster() {
   const setCompaction = useCallback((threshold: number) => post(`/compaction?threshold=${threshold}`), [post]);
   const addNode = useCallback(() => post('/nodes/add'), [post]);
   const removeNode = useCallback(() => post('/nodes/remove'), [post]);
+  const transferLeadership = useCallback(() => post('/transfer'), [post]);
 
   return {
     snapshot,
@@ -84,5 +85,6 @@ export function useCluster() {
     setCompaction,
     addNode,
     removeNode,
+    transferLeadership,
   };
 }

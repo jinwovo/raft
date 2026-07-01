@@ -29,12 +29,14 @@ import java.util.function.Consumer;
 public final class RaftNode {
 
 	private final String id;
-	private Set<String> baseConfig; // membership as of snapshotIndex (updated when a config entry is compacted)
-	private Set<String> currentConfig; // effective membership = latest config-change entry in the log, else baseConfig
+	private String baseConfigCommand; // the config-entry command in force as of snapshotIndex (may be a joint config)
+	private Set<String> currentConfig; // effective membership: single config, or C_new while a joint change is in flight
+	private Set<String> configOld; // C_old during a joint-consensus transition (§6); null when the config is not joint
 	private final RaftConfig config;
 	private final Random random; // election-timeout jitter only; injected for determinism
 	private final StateMachine stateMachine;
 	private final Consumer<Message> outbound;
+	private final Storage storage; // stable storage for crash recovery (Storage.NONE = no durability)
 
 	// --- persistent state (figure 2) ---
 	private long currentTerm = 0;
@@ -65,6 +67,11 @@ public final class RaftNode {
 	private final Map<Long, PendingRead> pendingReads = new HashMap<>();
 	private final Map<Long, Long> completedReads = new LinkedHashMap<>();
 
+	// --- leadership transfer (§3.10) ---
+	private String transferTarget = null; // the follower we are handing leadership to, or null
+	private boolean timeoutNowSent = false; // whether TimeoutNow has already gone out for this handover
+	private long transferDeadline = 0; // abort the transfer (resume normal service) once this passes
+
 	// --- timers, in the injected clock's units ---
 	private boolean initialised = false;
 	private long electionDeadline;
@@ -83,16 +90,61 @@ public final class RaftNode {
 
 	public RaftNode(String id, List<String> cluster, RaftConfig config, Random random, StateMachine stateMachine,
 			Consumer<Message> outbound) {
+		this(id, cluster, config, random, stateMachine, outbound, Storage.NONE);
+	}
+
+	public RaftNode(String id, List<String> cluster, RaftConfig config, Random random, StateMachine stateMachine,
+			Consumer<Message> outbound, Storage storage) {
 		if (!cluster.contains(id)) {
 			throw new IllegalArgumentException("cluster must contain this node's id: " + id);
 		}
 		this.id = id;
-		this.baseConfig = new LinkedHashSet<>(cluster);
+		this.baseConfigCommand = configCommand(new LinkedHashSet<>(cluster));
 		this.currentConfig = new LinkedHashSet<>(cluster);
+		this.configOld = null;
 		this.config = config;
 		this.random = random;
 		this.stateMachine = stateMachine;
 		this.outbound = outbound;
+		this.storage = storage;
+	}
+
+	/** Private constructor used by {@link #restore} to rebuild a node from its persisted {@link PersistentState}. */
+	private RaftNode(String id, RaftConfig config, Random random, StateMachine stateMachine, Consumer<Message> outbound,
+			Storage storage, PersistentState s) {
+		this.id = id;
+		this.config = config;
+		this.random = random;
+		this.stateMachine = stateMachine;
+		this.outbound = outbound;
+		this.storage = storage;
+		this.currentTerm = s.currentTerm();
+		this.votedFor = s.votedFor();
+		this.snapshotIndex = s.snapshotIndex();
+		this.snapshotTerm = s.snapshotTerm();
+		this.snapshotData = s.snapshotData();
+		this.baseConfigCommand = s.baseConfigCommand();
+		this.log.addAll(s.log());
+		// The snapshot is already applied state; entries above it are re-applied as the leader re-advertises
+		// commit progress. Role/leader are volatile and start fresh (follower), exactly as a real reboot.
+		this.commitIndex = s.snapshotIndex();
+		this.lastApplied = s.snapshotIndex();
+		if (!s.snapshotData().isEmpty()) {
+			stateMachine.restore(s.snapshotData());
+		}
+		recomputeConfig();
+	}
+
+	/**
+	 * Rebuild a server after a crash from its {@link Storage}, recovering its term, vote, log and snapshot so
+	 * it can rejoin without violating safety (notably: it will not cast a second vote in a term it already
+	 * voted in). Throws if the storage holds no saved state — use a normal constructor for a fresh node.
+	 */
+	public static RaftNode restore(String id, RaftConfig config, Random random, StateMachine stateMachine,
+			Consumer<Message> outbound, Storage storage) {
+		PersistentState s = storage.load()
+				.orElseThrow(() -> new IllegalStateException("no persisted state to restore for " + id));
+		return new RaftNode(id, config, random, stateMachine, outbound, storage, s);
 	}
 
 	// ====================================================================================
@@ -103,14 +155,18 @@ public final class RaftNode {
 	public void tick(long now) {
 		ensureInitialised(now);
 		if (role == RaftRole.LEADER) {
+			if (transferTarget != null && now >= transferDeadline) {
+				clearTransfer(); // the target never caught up / campaigned in time — resume normal service
+			}
 			if (now >= heartbeatDeadline) {
 				broadcastAppendEntries();
 				heartbeatDeadline = now + config.heartbeatIntervalMillis();
 			}
 		}
-		else if (now >= electionDeadline && currentConfig.contains(id)) {
+		else if (now >= electionDeadline && isVoter()) {
 			// A server not in the current configuration (e.g. a leader that just removed itself, §6) is no
 			// longer a voting member and must stay passive — it never campaigns and so can't disrupt the cluster.
+			// During a joint change "voting member" means being in C_old OR C_new (the union).
 			if (config.preVote()) {
 				startPreElection(now);
 			}
@@ -118,6 +174,7 @@ public final class RaftNode {
 				startElection(now);
 			}
 		}
+		persist();
 	}
 
 	/** Handle one inbound RPC. */
@@ -133,6 +190,7 @@ public final class RaftNode {
 			role = RaftRole.FOLLOWER;
 			leaderId = null;
 			pendingReads.clear(); // no longer leader — any in-flight reads can never be confirmed
+			clearTransfer(); // abandon any handover we were driving — we're not the leader any more
 		}
 
 		switch (msg) {
@@ -142,7 +200,9 @@ public final class RaftNode {
 			case Message.AppendEntriesReply m -> handleAppendEntriesReply(m, now);
 			case Message.InstallSnapshotRequest m -> handleInstallSnapshot(m, now);
 			case Message.InstallSnapshotReply m -> handleInstallSnapshotReply(m, now);
+			case Message.TimeoutNowRequest m -> handleTimeoutNow(m, now);
 		}
+		persist();
 	}
 
 	/**
@@ -150,12 +210,15 @@ public final class RaftNode {
 	 * node is not the leader (the caller should redirect to {@link #leaderId()}).
 	 */
 	public boolean propose(String command) {
-		if (role != RaftRole.LEADER) {
+		if (role != RaftRole.LEADER || transferTarget != null) {
+			// §3.10: while handing leadership over, stop accepting writes so the target can catch up to a fixed
+			// log and the handover actually converges.
 			return false;
 		}
 		log.add(new LogEntry(currentTerm, lastLogIndex() + 1, command));
 		broadcastAppendEntries();
 		maybeAdvanceCommit();
+		persist();
 		return true;
 	}
 
@@ -199,7 +262,7 @@ public final class RaftNode {
 		for (String peer : peers()) {
 			outbound.accept(new Message.RequestVoteRequest(id, peer, preVoteTerm, lastIndex, lastTerm, true));
 		}
-		if (preVotesGranted.size() >= majority()) {
+		if (hasQuorum(preVotesGranted)) {
 			startElection(now);
 		}
 	}
@@ -253,14 +316,14 @@ public final class RaftNode {
 		}
 		if (m.voteGranted()) {
 			preVotesGranted.add(m.from());
-			if (preVotesGranted.size() >= majority()) {
+			if (hasQuorum(preVotesGranted)) {
 				startElection(now);
 			}
 		}
 	}
 
 	private void maybeBecomeLeader(long now) {
-		if (role == RaftRole.CANDIDATE && votesGranted.size() >= majority()) {
+		if (role == RaftRole.CANDIDATE && hasQuorum(votesGranted)) {
 			becomeLeader(now);
 		}
 	}
@@ -269,6 +332,7 @@ public final class RaftNode {
 		role = RaftRole.LEADER;
 		leaderId = id;
 		committedInCurrentTerm = false;
+		clearTransfer(); // a freshly elected leader owns leadership outright — no handover in flight
 		pendingReads.clear();
 		completedReads.clear();
 		long next = lastLogIndex() + 1;
@@ -287,6 +351,62 @@ public final class RaftNode {
 		long myTerm = lastLogTerm();
 		long myIndex = lastLogIndex();
 		return candidateLastTerm > myTerm || (candidateLastTerm == myTerm && candidateLastIndex >= myIndex);
+	}
+
+	// ====================================================================================
+	// Leadership transfer (§3.10)
+	// ====================================================================================
+
+	/**
+	 * Gracefully hand leadership to {@code target} (dissertation §3.10) — for a planned shutdown or to move
+	 * the leader onto a better-placed node without waiting out an election timeout. The leader stops taking
+	 * writes, makes sure the target's log is fully caught up, then tells it to campaign immediately via
+	 * {@link Message.TimeoutNowRequest}. If the handover has not completed within one election timeout the
+	 * leader gives up and resumes normal service. Returns {@code false} if this node isn't a leader or
+	 * {@code target} isn't a current follower.
+	 */
+	public boolean transferLeadership(String target, long now) {
+		if (role != RaftRole.LEADER || target.equals(id) || !currentConfig.contains(target)) {
+			return false;
+		}
+		transferTarget = target;
+		timeoutNowSent = false;
+		transferDeadline = now + config.electionTimeoutMaxMillis();
+		if (!maybeSendTimeoutNow(target)) {
+			sendAppendEntries(target); // not caught up yet — push the missing entries, then hand off on the ack
+		}
+		return true;
+	}
+
+	/**
+	 * If {@code peer} is the transfer target and has fully replicated our log, tell it to campaign now. We
+	 * keep {@code transferTarget} pinned (so writes stay blocked) until the handover resolves — the target
+	 * winning bumps our term and steps us down, or the deadline aborts — but only dispatch TimeoutNow once.
+	 */
+	private boolean maybeSendTimeoutNow(String peer) {
+		if (!peer.equals(transferTarget) || role != RaftRole.LEADER || timeoutNowSent) {
+			return false;
+		}
+		if (matchIndex.getOrDefault(peer, 0L) < lastLogIndex()) {
+			return false; // still behind — wait for the next successful AppendEntries
+		}
+		outbound.accept(new Message.TimeoutNowRequest(id, peer, currentTerm));
+		timeoutNowSent = true;
+		return true;
+	}
+
+	private void clearTransfer() {
+		transferTarget = null;
+		timeoutNowSent = false;
+	}
+
+	private void handleTimeoutNow(Message.TimeoutNowRequest m, long now) {
+		// The current leader is handing off to us: campaign at once, skipping the election timeout and the
+		// pre-vote round. Ignore a stale request, or one aimed at a server no longer in the configuration.
+		if (m.term() < currentTerm || !currentConfig.contains(id)) {
+			return;
+		}
+		startElection(now);
 	}
 
 	// ====================================================================================
@@ -399,6 +519,7 @@ public final class RaftNode {
 			if (m.readId() != 0) {
 				confirmRead(m.readId(), m.from());
 			}
+			maybeSendTimeoutNow(m.from()); // §3.10: hand off once the transfer target has fully caught up
 		}
 		else {
 			long backup = Math.max(1, m.conflictIndex());
@@ -416,18 +537,23 @@ public final class RaftNode {
 			if (termAt(n) != currentTerm) {
 				continue;
 			}
-			// A leader that has removed itself from the configuration (§6) no longer counts toward a
-			// majority — its own replica doesn't help commit C_new. Otherwise it counts for itself.
-			int replicas = currentConfig.contains(id) ? 1 : 0;
+			// Collect who has replicated n. A leader that has removed itself (§6) is no longer a voting member
+			// and its own replica doesn't count. During a joint change this set must clear a majority in BOTH
+			// C_old and C_new (that is the whole safety guarantee of joint consensus — no split brain).
+			Set<String> replicated = new LinkedHashSet<>();
+			if (isVoter()) {
+				replicated.add(id);
+			}
 			for (String peer : peers()) {
 				if (matchIndex.getOrDefault(peer, 0L) >= n) {
-					replicas++;
+					replicated.add(peer);
 				}
 			}
-			if (replicas >= majority()) {
+			if (hasQuorum(replicated)) {
 				commitIndex = n;
 				committedInCurrentTerm = true; // n is a current-term entry (the §5.4.2 guard above guarantees it)
 				applyCommitted();
+				maybeAppendFinalConfig(); // §6: a committed C_old,new triggers the switch to C_new
 				maybeStepDownIfRemoved();
 				return;
 			}
@@ -440,8 +566,8 @@ public final class RaftNode {
 	 * leader (someone has to drive the change); once committed, the remaining servers elect a fresh leader.
 	 */
 	private void maybeStepDownIfRemoved() {
-		if (role != RaftRole.LEADER || currentConfig.contains(id)) {
-			return;
+		if (role != RaftRole.LEADER || isVoter()) {
+			return; // still a voting member (in C_old, C_new, or the single config) — keep leading
 		}
 		for (int i = log.size() - 1; i >= 0; i--) {
 			if (isConfigEntry(log.get(i).command())) {
@@ -450,6 +576,30 @@ public final class RaftNode {
 					role = RaftRole.FOLLOWER;
 					leaderId = null;
 					pendingReads.clear();
+				}
+				return;
+			}
+		}
+	}
+
+	/**
+	 * §6 second phase of a joint change: once the {@code C_old,new} entry commits, the leader appends the
+	 * final {@code C_new}-only entry. Agreement now needs only a C_new majority, and any server outside C_new
+	 * (possibly the leader itself) steps down once that commits. Called right after a commit advances.
+	 */
+	private void maybeAppendFinalConfig() {
+		if (role != RaftRole.LEADER || configOld == null) {
+			return; // only the leader drives the transition, and only while the effective config is joint
+		}
+		for (int i = log.size() - 1; i >= 0; i--) {
+			if (isConfigEntry(log.get(i).command())) {
+				long jointIndex = snapshotIndex + i + 1;
+				if (jointIndex <= commitIndex) {
+					Set<String> cNew = new LinkedHashSet<>(currentConfig); // C_new is the incoming half of the joint config
+					log.add(new LogEntry(currentTerm, lastLogIndex() + 1, configCommand(cNew)));
+					recomputeConfig();
+					broadcastAppendEntries();
+					maybeAdvanceCommit();
 				}
 				return;
 			}
@@ -485,7 +635,7 @@ public final class RaftNode {
 		for (int k = 0; k < discard; k++) {
 			LogEntry front = log.get(0);
 			if (isConfigEntry(front.command())) {
-				baseConfig = parseConfig(front.command()); // a config in the compacted prefix becomes the base
+				baseConfigCommand = front.command(); // a config in the compacted prefix becomes the base (may be joint)
 			}
 			log.remove(0);
 		}
@@ -565,7 +715,7 @@ public final class RaftNode {
 		}
 		PendingRead read = new PendingRead(commitIndex);
 		read.acks.add(id); // the leader counts for itself
-		if (read.acks.size() >= majority()) {
+		if (hasQuorum(read.acks)) {
 			read.confirmed = true; // single-node cluster: leadership is trivially confirmed
 		}
 		pendingReads.put(readId, read);
@@ -586,7 +736,7 @@ public final class RaftNode {
 			return;
 		}
 		read.acks.add(from);
-		if (read.acks.size() >= majority()) {
+		if (hasQuorum(read.acks)) {
 			read.confirmed = true;
 			tryCompleteRead(readId);
 		}
@@ -637,10 +787,35 @@ public final class RaftNode {
 		recomputeConfig();
 		broadcastAppendEntries();
 		maybeAdvanceCommit();
+		persist();
+		return true;
+	}
+
+	/**
+	 * Propose an <em>arbitrary</em> configuration change via joint consensus (dissertation §6) — safe even
+	 * when it swaps several servers at once, which the single-server rule can't do without risking two
+	 * disjoint majorities. The leader appends a transitional {@code C_old,new} entry; while it is in force,
+	 * every election and commit needs a majority of <em>both</em> C_old and C_new, so the two configurations
+	 * can never elect conflicting leaders. Once {@code C_old,new} commits, {@link #maybeAppendFinalConfig()}
+	 * appends the final {@code C_new}. Rejected while any change (single or joint) is still settling.
+	 */
+	public boolean proposeJointConfigChange(Set<String> newConfig) {
+		if (role != RaftRole.LEADER || newConfig.isEmpty() || configOld != null || configChangePending()) {
+			return false;
+		}
+		Set<String> cOld = new LinkedHashSet<>(currentConfig);
+		log.add(new LogEntry(currentTerm, lastLogIndex() + 1, jointConfigCommand(cOld, newConfig)));
+		recomputeConfig();
+		broadcastAppendEntries();
+		maybeAdvanceCommit();
+		persist();
 		return true;
 	}
 
 	private boolean configChangePending() {
+		if (configOld != null) {
+			return true; // mid joint transition (C_old,new committed but C_new not yet, or vice versa)
+		}
 		// the latest configuration entry is uncommitted → a change is still in flight
 		for (int i = log.size() - 1; i >= 0; i--) {
 			if (isConfigEntry(log.get(i).command())) {
@@ -650,45 +825,95 @@ public final class RaftNode {
 		return false;
 	}
 
-	/** Re-derive the effective configuration: the latest config entry in the log, or the base config. */
+	/** Re-derive the effective configuration from the latest config entry in the log, or the base config. */
 	private void recomputeConfig() {
 		for (int i = log.size() - 1; i >= 0; i--) {
 			if (isConfigEntry(log.get(i).command())) {
-				currentConfig = parseConfig(log.get(i).command());
+				applyConfigCommand(log.get(i).command());
 				return;
 			}
 		}
-		currentConfig = new LinkedHashSet<>(baseConfig);
+		applyConfigCommand(baseConfigCommand);
+	}
+
+	/** Set {@code currentConfig} (and {@code configOld} if the command is joint) from a config-entry command. */
+	private void applyConfigCommand(String command) {
+		String body = command.substring(CONFIG_PREFIX.length());
+		int bar = body.indexOf('|');
+		if (bar < 0) {
+			configOld = null;
+			currentConfig = parseMembers(body);
+		}
+		else {
+			configOld = parseMembers(body.substring(0, bar));
+			currentConfig = parseMembers(body.substring(bar + 1));
+		}
+	}
+
+	/** The servers that get a vote: the single config, or the union of C_old and C_new during a joint change. */
+	private Set<String> votingMembers() {
+		if (configOld == null) {
+			return currentConfig;
+		}
+		Set<String> union = new LinkedHashSet<>(configOld);
+		union.addAll(currentConfig);
+		return union;
+	}
+
+	private boolean isVoter() {
+		return votingMembers().contains(id);
 	}
 
 	private List<String> peers() {
-		return currentConfig.stream().filter(m -> !m.equals(id)).toList();
+		return votingMembers().stream().filter(m -> !m.equals(id)).toList();
 	}
 
-	private int majority() {
-		return currentConfig.size() / 2 + 1;
+	/**
+	 * Does {@code acked} constitute a quorum? For a single configuration that is a simple majority; during a
+	 * joint change it must be a majority of <em>both</em> C_old and C_new independently — the property that
+	 * keeps two overlapping configurations from electing conflicting leaders.
+	 */
+	private boolean hasQuorum(Set<String> acked) {
+		if (!isMajorityOf(acked, currentConfig)) {
+			return false;
+		}
+		return configOld == null || isMajorityOf(acked, configOld);
+	}
+
+	private static boolean isMajorityOf(Set<String> acked, Set<String> config) {
+		int count = 0;
+		for (String member : config) {
+			if (acked.contains(member)) {
+				count++;
+			}
+		}
+		return count >= config.size() / 2 + 1;
 	}
 
 	private static final String CONFIG_PREFIX = " cfg ";
 
-	/** The command string for a configuration-change log entry over {@code config}. */
+	/** The command string for a single (non-joint) configuration-change log entry over {@code config}. */
 	public static String configCommand(Set<String> config) {
 		return CONFIG_PREFIX + String.join(",", config);
+	}
+
+	/** The command string for a transitional joint configuration {@code C_old,new} (encoded {@code old|new}). */
+	public static String jointConfigCommand(Set<String> oldConfig, Set<String> newConfig) {
+		return CONFIG_PREFIX + String.join(",", oldConfig) + "|" + String.join(",", newConfig);
 	}
 
 	private static boolean isConfigEntry(String command) {
 		return command.startsWith(CONFIG_PREFIX);
 	}
 
-	private static Set<String> parseConfig(String command) {
-		Set<String> config = new LinkedHashSet<>();
-		String body = command.substring(CONFIG_PREFIX.length());
+	private static Set<String> parseMembers(String body) {
+		Set<String> members = new LinkedHashSet<>();
 		if (!body.isEmpty()) {
 			for (String member : body.split(",")) {
-				config.add(member);
+				members.add(member);
 			}
 		}
-		return config;
+		return members;
 	}
 
 	// ====================================================================================
@@ -740,6 +965,15 @@ public final class RaftNode {
 		return new ArrayList<>(log.subList(from, log.size()));
 	}
 
+	/** Save the durable state to stable storage. Allocation-free and a no-op when storage is {@link Storage#NONE}. */
+	private void persist() {
+		if (storage == Storage.NONE) {
+			return;
+		}
+		storage.save(new PersistentState(currentTerm, votedFor, snapshotIndex, snapshotTerm, snapshotData,
+				baseConfigCommand, List.copyOf(log)));
+	}
+
 	private void ensureInitialised(long now) {
 		if (!initialised) {
 			resetElectionTimer(now);
@@ -770,6 +1004,11 @@ public final class RaftNode {
 		return currentTerm;
 	}
 
+	/** The candidate this node has voted for in {@link #currentTerm()} (null if it hasn't voted yet). */
+	public String votedFor() {
+		return votedFor;
+	}
+
 	public long commitIndex() {
 		return commitIndex;
 	}
@@ -790,9 +1029,14 @@ public final class RaftNode {
 		return leaderId;
 	}
 
-	/** The cluster membership this node currently believes in (the latest configuration in its log). */
+	/** The cluster membership this node currently believes in (C_new while a joint change is in flight). */
 	public Set<String> currentConfig() {
 		return Set.copyOf(currentConfig);
+	}
+
+	/** True while this node's effective configuration is a transitional joint {@code C_old,new} (§6). */
+	public boolean isJointConsensus() {
+		return configOld != null;
 	}
 
 	/** An immutable snapshot of the in-memory log (entries above {@link #snapshotIndex()}). */

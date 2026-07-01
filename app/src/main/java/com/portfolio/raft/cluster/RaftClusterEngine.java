@@ -110,6 +110,7 @@ public final class RaftClusterEngine {
 			case Message.AppendEntriesReply ignored -> "append-rep";
 			case Message.InstallSnapshotRequest ignored -> "snapshot";
 			case Message.InstallSnapshotReply ignored -> "snapshot-rep";
+			case Message.TimeoutNowRequest ignored -> "timeout-now";
 		};
 	}
 
@@ -253,6 +254,24 @@ public final class RaftClusterEngine {
 			ids.remove(victim);
 		}
 		return accepted;
+	}
+
+	/**
+	 * Gracefully hand leadership from the current leader to a live follower (Raft §3.10). The leader catches
+	 * the target up and sends it a TimeoutNow so it campaigns at once; false if there is no leader or no
+	 * eligible follower. Watch the leader badge hop to the new node within about a round trip.
+	 */
+	public synchronized boolean transferLeadership() {
+		RaftNode leader = leaderNode();
+		if (leader == null) {
+			return false;
+		}
+		for (String id : ids) {
+			if (!id.equals(leader.id()) && Boolean.TRUE.equals(up.get(id)) && leader.currentConfig().contains(id)) {
+				return leader.transferLeadership(id, clock);
+			}
+		}
+		return false;
 	}
 
 	private RaftNode leaderNode() {

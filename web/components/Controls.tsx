@@ -14,6 +14,7 @@ type Props = {
   onToggleCompaction: () => void;
   onAddNode: () => void;
   onRemoveNode: () => void;
+  onTransferLeadership: () => void;
 };
 
 export function Controls({
@@ -28,6 +29,7 @@ export function Controls({
   onToggleCompaction,
   onAddNode,
   onRemoveNode,
+  onTransferLeadership,
 }: Props) {
   const [lat, setLat] = useState(3);
   return (
@@ -58,6 +60,9 @@ export function Controls({
       </button>
       <button className="btn" onClick={onRemoveNode}>
         − node
+      </button>
+      <button className="btn" onClick={onTransferLeadership}>
+        ⇄ transfer leader
       </button>
       <label className="slider">
         latency

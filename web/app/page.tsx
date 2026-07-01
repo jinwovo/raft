@@ -46,6 +46,7 @@ export default function Page() {
         onToggleCompaction={() => cluster.setCompaction((snap?.snapshotThreshold ?? 0) > 0 ? 0 : 8)}
         onAddNode={cluster.addNode}
         onRemoveNode={cluster.removeNode}
+        onTransferLeadership={cluster.transferLeadership}
       />
 
       <p className="hint">

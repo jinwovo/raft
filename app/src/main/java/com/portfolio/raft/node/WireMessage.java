@@ -32,6 +32,8 @@ public record WireMessage(String type, String from, String to, long term, long l
 					r.lastIncludedTerm(), r.data());
 			case Message.InstallSnapshotReply r -> new WireMessage("InstallSnapshotReply", r.from(), r.to(), r.term(),
 					0, 0, false, false, 0, 0, List.of(), 0, 0, false, 0, 0, r.lastIncludedIndex(), 0, null);
+			case Message.TimeoutNowRequest r -> new WireMessage("TimeoutNowRequest", r.from(), r.to(), r.term(), 0, 0,
+					false, false, 0, 0, List.of(), 0, 0, false, 0, 0, 0, 0, null);
 		};
 	}
 
@@ -47,6 +49,7 @@ public record WireMessage(String type, String from, String to, long term, long l
 			case "InstallSnapshotRequest" ->
 				new Message.InstallSnapshotRequest(from, to, term, lastIncludedIndex, lastIncludedTerm, data);
 			case "InstallSnapshotReply" -> new Message.InstallSnapshotReply(from, to, term, lastIncludedIndex);
+			case "TimeoutNowRequest" -> new Message.TimeoutNowRequest(from, to, term);
 			default -> throw new IllegalArgumentException("unknown message type: " + type);
 		};
 	}

@@ -116,6 +116,20 @@ class ClusterEngineIntegrationTest {
 	}
 
 	@Test
+	void transfersLeadershipToAnotherNodeThroughTheLiveEngine() {
+		run(200);
+		String before = engine.snapshot().nodes().stream().filter(n -> "LEADER".equals(n.role()))
+				.map(ClusterSnapshot.NodeView::id).findFirst().orElseThrow();
+
+		assertThat(engine.transferLeadership()).as("a healthy cluster accepts a transfer").isTrue();
+		run(60);
+
+		String after = engine.snapshot().nodes().stream().filter(n -> "LEADER".equals(n.role()) && n.up())
+				.map(ClusterSnapshot.NodeView::id).findFirst().orElseThrow();
+		assertThat(after).as("leadership moved to a different node without a kill").isNotEqualTo(before);
+	}
+
+	@Test
 	void snapshotSerialisesToJsonForTheStream() {
 		run(50);
 		String json = mapper.writeValueAsString(engine.snapshot());
