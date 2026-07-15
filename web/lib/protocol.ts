@@ -14,10 +14,15 @@ export interface NodeView {
   up: boolean;
   side: number;
   log: string[];
+  /** Ticks until this node's election timer fires; -1 when it runs none (leader or down). */
+  electionIn: number;
+  /** Votes granted in the current candidacy (0 unless CANDIDATE). */
+  votes: number;
 }
 
 export interface MessageEvent {
-  // vote-req | vote-rep | heartbeat | append | append-rep
+  // vote-req | vote-rep | prevote-req | prevote-rep | heartbeat | append | append-rep
+  // | snapshot | snapshot-rep | timeout-now
   type: string;
   from: string;
   to: string;
@@ -31,4 +36,6 @@ export interface ClusterSnapshot {
   preVote: boolean;
   snapshotThreshold: number;
   joint: boolean;
+  /** The configured election-timeout upper bound in ticks, for normalising timer arcs. */
+  electionMax: number;
 }

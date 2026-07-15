@@ -402,11 +402,16 @@ public final class RaftClusterEngine {
 		for (String id : ids) {
 			RaftNode node = nodes.get(id);
 			List<String> log = node.logView().stream().map(LogEntry::command).toList();
+			boolean alive = up.get(id);
+			long electionIn = !alive || node.role() == RaftRole.LEADER ? -1
+					: Math.max(0, node.electionDeadline() - clock);
+			int votes = node.role() == RaftRole.CANDIDATE ? node.votesGranted().size() : 0;
 			views.add(new ClusterSnapshot.NodeView(id, node.role().name(), node.currentTerm(),
 					node.commitIndex(), node.lastApplied(), node.lastIndex(), node.snapshotIndex(),
-					node.leaderId(), up.get(id), side.get(id), log));
+					node.leaderId(), alive, side.get(id), log, electionIn, votes));
 		}
 		boolean joint = nodes.values().stream().anyMatch(RaftNode::isJointConsensus);
-		return new ClusterSnapshot(clock, views, List.copyOf(lastStepEvents), preVote, snapshotThreshold, joint);
+		return new ClusterSnapshot(clock, views, List.copyOf(lastStepEvents), preVote, snapshotThreshold, joint,
+				props.getElectionMax());
 	}
 }

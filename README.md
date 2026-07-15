@@ -238,12 +238,13 @@ pwsh scripts/raft-cluster-test.ps1
 | **P0** | `raft-core` engine — election, replication, commit/safety | ✅ done |
 | **P0.5** | deterministic chaos simulation proving the safety invariants | ✅ done |
 | **P1** | live server (Spring Boot 4.1): in-process cluster over a controllable network, WebSocket state stream, REST control API (kill / heal / partition / latency / propose) | ✅ done |
-| **P2** | Next.js visualizer — node ring with role colors, leader heartbeat ping, candidate pulse, animated RPC packets, per-node replicated-log strip; click to freeze/thaw, split & heal | ✅ done |
+| **P2** | Next.js visualizer — node ring with role colors, leader heartbeat ping, candidate pulse, animated RPC packets, per-node replicated-log strip; click to freeze/thaw, split & heal (superseded by the v2 UI in P8) | ✅ done |
 | **P3** | **pre-vote ✅ · snapshots & log compaction ✅ · linearizable reads (ReadIndex) ✅ · dynamic membership ✅** — single-server add/remove (proven by `MembershipTest`); all four are live toggles in the visualizer | ✅ done |
 | **P4** | **multi-instance over a real network ✅** — three separate JVMs talking over HTTP elect a leader, replicate to convergence, and survive a leader kill (`RealNetworkConvergenceTest` + `scripts/raft-cluster-test.ps1`) | ✅ done |
 | **P5** | demo GIF · ADRs · public repo · green CI | ✅ done |
 | **P6** | hardening — **linearizability oracle** (Wing & Gong / Knossos-style, with a negative test), a **throughput / latency / failover benchmark**, **leader self-removal** (§6 edge case), and a **`docker compose up` one-command demo** + a web build in CI | ✅ done |
 | **P7** | production-grade correctness — **exactly-once client sessions** (§8), **leadership transfer** (§3.10, live button), **joint consensus** for arbitrary membership changes (§6, dual majorities), and **persistence / crash recovery** (figure 2, no double-voting) | ✅ done |
+| **P8** | visualizer v2 — per-node **election-timer arcs** (drained by silence, refilled by every heartbeat — you can *see* why an election starts), candidate **vote badges**, partition hulls, a live **event feed** narrating elections / commits / faults / config epochs (derived client-side by diffing frames), **identity-colored log cells** so divergence and log repair are visible per entry, and grouped controls with one-key shortcuts | ✅ done |
 
 ## ADRs
 

@@ -176,6 +176,32 @@ class ClusterEngineIntegrationTest {
 	}
 
 	@Test
+	void exposesElectionTimersAndVotesInTheSnapshot() {
+		run(200);
+		ClusterSnapshot s = engine.snapshot();
+		assertThat(s.electionMax()).as("the timeout bound ships with every frame").isPositive();
+
+		ClusterSnapshot.NodeView leader = s.nodes().stream().filter(n -> "LEADER".equals(n.role()))
+				.findFirst().orElseThrow();
+		assertThat(leader.electionIn()).as("a leader runs no election timer").isEqualTo(-1);
+		s.nodes().stream().filter(n -> "FOLLOWER".equals(n.role()))
+				.forEach(f -> assertThat(f.electionIn())
+						.as("%s's timer is live and within the configured bound", f.id())
+						.isBetween(0L, s.electionMax()));
+
+		// freeze the leader: heartbeats stop, some follower's timer runs out, and it campaigns for itself
+		engine.kill(leader.id());
+		ClusterSnapshot.NodeView candidate = null;
+		for (int i = 0; i < 400 && candidate == null; i++) {
+			engine.step();
+			candidate = engine.snapshot().nodes().stream().filter(n -> "CANDIDATE".equals(n.role()))
+					.findFirst().orElse(null);
+		}
+		assertThat(candidate).as("an election starts once the dead leader's heartbeats stop").isNotNull();
+		assertThat(candidate.votes()).as("a candidate holds at least its own vote").isGreaterThanOrEqualTo(1);
+	}
+
+	@Test
 	void snapshotSerialisesToJsonForTheStream() {
 		run(50);
 		String json = mapper.writeValueAsString(engine.snapshot());

@@ -1029,6 +1029,16 @@ public final class RaftNode {
 		return leaderId;
 	}
 
+	/** The tick at which this node will start an election unless a leader (or candidate) resets it first. */
+	public long electionDeadline() {
+		return electionDeadline;
+	}
+
+	/** The votes this node has been granted in its current candidacy (meaningful while CANDIDATE). */
+	public Set<String> votesGranted() {
+		return Set.copyOf(votesGranted);
+	}
+
 	/** The cluster membership this node currently believes in (C_new while a joint change is in flight). */
 	public Set<String> currentConfig() {
 		return Set.copyOf(currentConfig);

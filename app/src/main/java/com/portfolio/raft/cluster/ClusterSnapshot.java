@@ -11,9 +11,10 @@ import java.util.List;
  * @param events  the messages sent during the step that produced this snapshot, for animating arrows
  * @param preVote whether the cluster is currently running with the pre-vote protocol enabled
  * @param joint   whether the cluster is mid joint-consensus transition (a C_old,new configuration, §6)
+ * @param electionMax the configured election-timeout upper bound in ticks, for normalising timer arcs
  */
 public record ClusterSnapshot(long tick, List<NodeView> nodes, List<MessageEvent> events, boolean preVote,
-		long snapshotThreshold, boolean joint) {
+		long snapshotThreshold, boolean joint, long electionMax) {
 
 	/**
 	 * @param id          node id
@@ -26,9 +27,12 @@ public record ClusterSnapshot(long tick, List<NodeView> nodes, List<MessageEvent
 	 * @param up          false if the node is frozen/crashed
 	 * @param side        partition side; nodes on different sides cannot reach each other
 	 * @param log         the node's log, as the list of commands
+	 * @param electionIn  ticks until this node's election timer fires (-1 when it runs none: leader or down)
+	 * @param votes       votes granted in the current candidacy (0 unless CANDIDATE)
 	 */
 	public record NodeView(String id, String role, long term, long commitIndex, long lastApplied,
-			long lastIndex, long snapshotIndex, String leaderId, boolean up, int side, List<String> log) {
+			long lastIndex, long snapshotIndex, String leaderId, boolean up, int side, List<String> log,
+			long electionIn, int votes) {
 	}
 
 	/** A single RPC sent this step: {@code type} ∈ vote-req/vote-rep/heartbeat/append/append-rep. */
